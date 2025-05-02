@@ -35,11 +35,12 @@ def create_track_db(db_path=DB_PATH, data_dir=DATA_DIR):
 
     unique = {}
     for txt_file in glob.glob(str(data_dir / "*.txt")):
+        # adjust encoding if needed
         with open(txt_file, newline="", encoding="utf-16") as f:
             reader = csv.DictReader(f, delimiter="\t")
             for row in reader:
-                title  = row.get("Track Title","").strip()
-                artist = row.get("Artist","").strip()
+                title  = row.get("Track Title", "").strip()
+                artist = row.get("Artist", "").strip()
                 if not title or not artist:
                     continue
                 key_ = (title.lower(), artist.lower())
@@ -99,6 +100,22 @@ def get_all_track_titles(db_path=DB_PATH):
     rows = c.fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+def get_all_tracks(db_path=DB_PATH):
+    """
+    Return a list of dicts for every track in track_info,
+    with keys: title, artist, bpm, key.
+    """
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute('SELECT track_title, artist, bpm, key FROM track_info')
+    rows = c.fetchall()
+    conn.close()
+    return [
+        {"title": t, "artist": a, "bpm": b or 0, "key": k or ""}
+        for (t, a, b, k) in rows
+    ]
+
 
 if __name__ == "__main__":
     create_track_db()

@@ -8,14 +8,20 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont
+
 from widgets.cover_carousel import CoverCarousel
 from utils.soundcloud_import import fetch_sc_playlist_full
-from utils.track_db import get_track_info, get_all_track_titles
+from utils.track_db import (
+    get_track_info, get_all_track_titles, get_all_tracks
+)
 from utils.setlist_order import hybrid_order, camelot_distance
 
-# Optional Energy Curve imports
+# Matplotlib for energy curve
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
+
+MAX_LOOKAHEAD = 10
+
 
 class MainWindow(QMainWindow):
     def __init__(self, playlist_url):
@@ -23,45 +29,51 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DJ Sidecar")
         self.setMinimumSize(820, 600)
 
-        # --- Main layout ---
+        # Main container
         container = QWidget()
         self.main_layout = QVBoxLayout(container)
         self.main_layout.setContentsMargins(20, 20, 20, 20)
         self.main_layout.setSpacing(15)
 
         # Header
-        header = QLabel("DJ Sidecar")
-        header.setFont(QFont("Arial", 24, QFont.Bold))
-        header.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(header)
+        hdr = QLabel("DJ Sidecar")
+        hdr.setFont(QFont("Arial", 24, QFont.Bold))
+        hdr.setAlignment(Qt.AlignCenter)
+        self.main_layout.addWidget(hdr)
 
-        # Fetch library items
-        raw_tracks = fetch_sc_playlist_full(playlist_url)
-        self.library_items = []
-        for t in raw_tracks:
+        # 1) Load full DB as library
+        db_tracks = get_all_tracks()
+        self.library_items = [
+            {**t, "thumbnail": None, "duration": 0.0}
+            for t in db_tracks
+        ]
+
+        # 2) Fetch current playlist & build active setlist
+        raw = fetch_sc_playlist_full(playlist_url)
+        playlist_items = []
+        for t in raw:
             title = t.get("title", "")
-            artist = t.get("artist", "")
-            bpm, key = get_track_info(title)
-            duration = t.get("duration", 0) / 1000.0
-            self.library_items.append({
+            rec = next((x for x in self.library_items if x["title"] == title), None)
+            bpm = rec["bpm"] if rec else None
+            key = rec["key"] if rec else ""
+            playlist_items.append({
                 "thumbnail": t.get("thumbnail"),
                 "title":     title,
-                "artist":    artist,
+                "artist":    t.get("artist", ""),
                 "bpm":       bpm or 0,
                 "key":       key or "",
-                "duration":  duration
+                "duration":  t.get("duration", 0) / 1000.0
             })
 
-        # Hybrid ordering
-        self.ordered_items = hybrid_order(self.library_items.copy())
+        self.ordered_items = hybrid_order(playlist_items)
 
         # Carousel
         self.carousel = CoverCarousel(self.ordered_items)
         self.carousel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.main_layout.addWidget(self.carousel)
 
-        # Optional Energy Curve (hidden by default)
-        bpm_vals = [item["bpm"] for item in self.ordered_items]
+        # Energy curve (hidden)
+        bpm_vals = [it["bpm"] for it in self.ordered_items]
         fig, ax = plt.subplots(figsize=(6,2), dpi=100)
         ax.plot(range(1, len(bpm_vals)+1), bpm_vals, marker="o")
         ax.set_title("Energy Curve (BPM)")
@@ -74,105 +86,102 @@ class MainWindow(QMainWindow):
         self.energy_canvas.setVisible(False)
         self.main_layout.addWidget(self.energy_canvas)
 
-        # --- Bottom half split: Transition Notes | Song Request ---
+        # Bottom split: notes | request
         bottom = QWidget()
-        bottom_l = QHBoxLayout(bottom)
-        bottom_l.setContentsMargins(0,0,0,0)
-        bottom_l.setSpacing(20)
+        bl = QHBoxLayout(bottom)
+        bl.setContentsMargins(0,0,0,0)
+        bl.setSpacing(20)
 
-        # Left: Transition Notes
+        # Transition Notes
         left = QWidget()
-        left_l = QVBoxLayout(left)
-        left_l.setContentsMargins(0,0,0,0)
-        left_l.setSpacing(10)
-
-        lbl_notes = QLabel("Transition Notes")
-        lbl_notes.setFont(QFont("Arial", 16, QFont.Bold))
-        left_l.addWidget(lbl_notes)
-
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0,0,0,0)
+        ll.setSpacing(10)
+        lbln = QLabel("Transition Notes")
+        lbln.setFont(QFont("Arial", 16, QFont.Bold))
+        ll.addWidget(lbln)
         self.transition_notes = QTextEdit()
         self.transition_notes.setPlaceholderText("Write transition notes here…")
         self.transition_notes.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        left_l.addWidget(self.transition_notes)
+        ll.addWidget(self.transition_notes)
+        bl.addWidget(left, stretch=3)
 
-        bottom_l.addWidget(left, stretch=3)
-
-        # Right: Song Request
+        # Song Request
         right = QWidget()
-        right_l = QVBoxLayout(right)
-        right_l.setContentsMargins(0,0,0,0)
-        right_l.setSpacing(10)
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0,0,0,0)
+        rl.setSpacing(10)
+        lblr = QLabel("Song Request")
+        lblr.setFont(QFont("Arial", 16, QFont.Bold))
+        rl.addWidget(lblr)
 
-        lbl_req = QLabel("Song Request")
-        lbl_req.setFont(QFont("Arial", 16, QFont.Bold))
-        right_l.addWidget(lbl_req)
-
-        # Autocomplete setup
+        # Autocomplete
         titles = get_all_track_titles()
-        completer = QCompleter(titles)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-
+        comp = QCompleter(titles)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
         self.req_input = QLineEdit()
         self.req_input.setPlaceholderText("Type track name...")
-        self.req_input.setCompleter(completer)
-        right_l.addWidget(self.req_input)
+        self.req_input.setCompleter(comp)
+        rl.addWidget(self.req_input)
 
-        btn_add = QPushButton("Add Request")
-        btn_add.clicked.connect(self.handle_request)
-        right_l.addWidget(btn_add)
-
-        right_l.addStretch()
-        bottom_l.addWidget(right, stretch=2)
+        btn = QPushButton("Add Request")
+        btn.clicked.connect(self.handle_request)
+        rl.addWidget(btn)
+        rl.addStretch()
+        bl.addWidget(right, stretch=2)
 
         self.main_layout.addWidget(bottom)
 
         # Navigation buttons
         nav = QHBoxLayout()
         nav.addStretch()
-        btn_prev = QPushButton("⟵ Previous")
-        btn_next = QPushButton("Next ⟶")
-        btn_prev.clicked.connect(self.carousel.previous)
-        btn_next.clicked.connect(self.carousel.next)
-        nav.addWidget(btn_prev)
-        nav.addWidget(btn_next)
+        bprev = QPushButton("⟵ Previous")
+        bnext = QPushButton("Next ⟶")
+        bprev.clicked.connect(self.carousel.previous)
+        bnext.clicked.connect(self.carousel.next)
+        nav.addWidget(bprev)
+        nav.addWidget(bnext)
         nav.addStretch()
         self.main_layout.addLayout(nav)
 
         self.setCentralWidget(container)
-
-        # Side dock: Full Queue & Energy Toggle
         self._init_queue_dock()
 
     def _init_queue_dock(self):
         dock = QDockWidget("Queue & Options", self)
         dock.setAllowedAreas(Qt.LeftDockWidgetArea)
-
-        dock_w = QWidget()
-        dock_l = QVBoxLayout(dock_w)
-        dock_l.setContentsMargins(10,10,10,10)
-        dock_l.setSpacing(15)
+        w = QWidget()
+        l = QVBoxLayout(w)
+        l.setContentsMargins(10,10,10,10)
+        l.setSpacing(10)
 
         # Energy toggle
         chk = QPushButton("Show Energy Curve")
         chk.setCheckable(True)
         chk.toggled.connect(self.energy_canvas.setVisible)
-        dock_l.addWidget(chk)
+        l.addWidget(chk)
 
-        # Queue list
+        # Queue search
+        self.queue_search = QLineEdit()
+        self.queue_search.setPlaceholderText("Search queue…")
+        self.queue_search.textChanged.connect(self.filter_queue_list)
+        l.addWidget(self.queue_search)
+
+        # Numbered queue
         self.lst = QListWidget()
         self.lst.setFont(QFont("Arial", 14, QFont.Bold))
         self.lst.setAlternatingRowColors(True)
         self.lst.setStyleSheet("""
-            QListWidget { background: #2e2e2e; color: white; border: none; }
-            QListWidget::item { margin: 8px; padding: 10px; }
-            QListWidget::item:alternate { background: #2a2a2e; }
-            QListWidget::item:selected { background: #5e5e5e; }
-            QListWidget::item:hover { background: #444444; }
+            QListWidget{background:#2e2e2e;color:white;border:none;}
+            QListWidget::item{margin:8px;padding:10px;}
+            QListWidget::item:alternate{background:#2a2e2e;}
+            QListWidget::item:selected{background:#5e5e5e;}
+            QListWidget::item:hover{background:#444444;}
         """)
         self.lst.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        dock_l.addWidget(self.lst)
+        l.addWidget(self.lst)
 
-        dock.setWidget(dock_w)
+        dock.setWidget(w)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         dock.setVisible(False)
 
@@ -181,70 +190,102 @@ class MainWindow(QMainWindow):
         tb = self.addToolBar("View")
         tb.addAction(toggle)
 
-        self.refresh_queue_list()
+        self.filter_queue_list("")
+
+    def filter_queue_list(self, text: str):
+        self.lst.clear()
+        q = text.lower()
+        for idx, tr in enumerate(self.ordered_items):
+            title = tr["title"]
+            if q and q not in title.lower():
+                continue
+            item = QListWidgetItem(f"{idx+1}. {title}")
+            item.setSizeHint(QSize(0,50))
+            self.lst.addItem(item)
+        # center current
+        cur = self.carousel.current_index
+        hits = self.lst.findItems(f"{cur+1}.", Qt.MatchStartsWith)
+        if hits:
+            self.lst.setCurrentItem(hits[0])
+            self.lst.scrollToItem(hits[0], QAbstractItemView.PositionAtCenter)
 
     def handle_request(self):
-        query = self.req_input.text().strip().lower()
-        if not query:
+        raw = self.req_input.text().strip().lower()
+        if not raw:
             return
-        # 1) find the track in your library
+        # find in DB-library
         match = next((t for t in self.library_items
-                      if query in t["title"].lower()), None)
+                      if raw in t["title"].lower()), None)
         if not match:
             QMessageBox.warning(self, "Not found",
                                 f"No track matching '{self.req_input.text()}'.")
             return
 
         curr = self.carousel.current_index
+        new_bpm, new_key = match["bpm"], match["key"]
 
-        # 2) score every insertion point after curr
-        best_idx = None
-        best_cost = float('inf')
-        new_bpm = match['bpm']
-        new_key = match['key']
-
+        # 1) global best
+        global_idx, global_cost = None, float('inf')
         for i in range(curr+1, len(self.ordered_items)+1):
-            # neighbor before insertion
             prev = self.ordered_items[i-1]
-            cost = abs(new_bpm - prev['bpm']) + camelot_distance(new_key, prev['key'])
-            # neighbor after insertion (if any)
+            cost = abs(new_bpm - prev["bpm"]) + camelot_distance(new_key, prev["key"])
             if i < len(self.ordered_items):
                 nxt = self.ordered_items[i]
-                cost += abs(new_bpm - nxt['bpm']) + camelot_distance(new_key, nxt['key'])
-            if cost < best_cost:
-                best_cost = cost
-                best_idx = i
+                cost += abs(new_bpm - nxt["bpm"]) + camelot_distance(new_key, nxt["key"])
+            if cost < global_cost:
+                global_cost, global_idx = cost, i
 
-        # 3) compute how far away and approximate time
-        dist = best_idx - curr
-        secs = sum(t["duration"] for t in
-                   self.ordered_items[curr+1:best_idx+1])
-        mins, secs = divmod(int(secs), 60)
+        # 2) local best within next MAX_LOOKAHEAD
+        local_idx, local_cost = None, float('inf')
+        for i in range(curr+1, min(curr+1+MAX_LOOKAHEAD, len(self.ordered_items))+1):
+            prev = self.ordered_items[i-1]
+            cost = abs(new_bpm - prev["bpm"]) + camelot_distance(new_key, prev["key"])
+            if i < len(self.ordered_items):
+                nxt = self.ordered_items[i]
+                cost += abs(new_bpm - nxt["bpm"]) + camelot_distance(new_key, nxt["key"])
+            if cost < local_cost:
+                local_cost, local_idx = cost, i
 
-        # 4) confirmation dialog
-        reply = QMessageBox.question(
-            self, "Confirm Insertion",
-            (f"Best fit for '{match['title']}' is in {dist} song(s) "
-             f"(≈{mins}m {secs}s) from now.\n\nAdd it there?"),
+        # times/distances
+        g_dist = global_idx - curr
+        g_secs = sum(t["duration"] for t in self.ordered_items[curr+1:global_idx+1])
+        g_m, g_s = divmod(int(g_secs), 60)
+        l_dist = local_idx - curr
+        l_secs = sum(t["duration"] for t in self.ordered_items[curr+1:local_idx+1])
+        l_m, l_s = divmod(int(l_secs), 60)
+
+        # Prompt with two buttons
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Choose insertion spot")
+        msg.setText(
+            f"Optimal spot for '{match['title']}' is in {g_dist} songs (≈{g_m}m{g_s}s).\n"
+            f"Best within next {MAX_LOOKAHEAD} is in {l_dist} songs (≈{l_m}m{l_s}s)."
+        )
+        btn_local = msg.addButton(f"Insert in {l_dist}", QMessageBox.ActionRole)
+        btn_global = msg.addButton(f"Insert in {g_dist}", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Cancel)
+        msg.exec()
+
+        choice = msg.clickedButton()
+        if choice == btn_local:
+            insert_idx = local_idx
+            dist, mins, secs = l_dist, l_m, l_s
+        elif choice == btn_global:
+            insert_idx = global_idx
+            dist, mins, secs = g_dist, g_m, g_s
+        else:
+            return  # canceled
+
+        # Final confirmation
+        final = QMessageBox.question(
+            self, "Confirm",
+            f"Insert '{match['title']}' in {dist} songs (≈{mins}m{secs}s)?",
             QMessageBox.Yes | QMessageBox.No
         )
-        if reply != QMessageBox.Yes:
+        if final != QMessageBox.Yes:
             return
 
-        # 5) perform insertion and refresh UI
-        self.ordered_items.insert(best_idx, match)
+        # Insert and refresh
+        self.ordered_items.insert(insert_idx, match)
         self.carousel.set_items(self.ordered_items)
-        self.refresh_queue_list()
-
-    def refresh_queue_list(self):
-        self.lst.clear()
-        for t in self.ordered_items:
-            item = QListWidgetItem(t["title"])
-            item.setSizeHint(QSize(0, 50))
-            self.lst.addItem(item)
-        # highlight & center current track
-        curr_row = self.carousel.current_index
-        self.lst.setCurrentRow(curr_row)
-        current_item = self.lst.currentItem()
-        if current_item:
-            self.lst.scrollToItem(current_item, QAbstractItemView.PositionAtCenter)
+        self.filter_queue_list(self.queue_search.text())

@@ -8,46 +8,57 @@ from PySide6.QtCore import Qt, QPropertyAnimation
 from PySide6.QtGui import QPixmap, QFont
 import requests
 
+NEON_GREEN = "#39FF14"
+
+
 class CarouselItem(QWidget):
     """
-    A square cover + metadata widget for a single track.
-    Long titles/artists will wrap and push everything below.
+    A cover + metadata widget for a single track.
+    If no thumbnail URL is provided, shows a neon-green box.
     """
     def __init__(self, data, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(8)
-        # fix the column width; height will expand
+
         self.setMaximumWidth(200)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
-        # --- Cover image ---
+        # Cover image or placeholder
         self.label_img = QLabel()
         self.label_img.setAlignment(Qt.AlignCenter)
-        self.pixmap = QPixmap()
-        try:
-            resp = requests.get(data.get("thumbnail", ""), timeout=5)
-            self.pixmap.loadFromData(resp.content)
-        except Exception:
-            pass
-        # scaled square
-        self.label_img.setPixmap(
-            self.pixmap.scaled(160, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        )
-        self.label_img.setFixedSize(160, 160)
+        thumb = data.get("thumbnail")
+        if thumb:
+            self.pixmap = QPixmap()
+            try:
+                resp = requests.get(thumb, timeout=5)
+                self.pixmap.loadFromData(resp.content)
+            except Exception:
+                self.pixmap = QPixmap()
+            self.label_img.setPixmap(
+                self.pixmap.scaled(160, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+            self.label_img.setFixedSize(160, 160)
+            self.label_img.setStyleSheet("background: transparent;")
+        else:
+            # neon-green placeholder
+            self.pixmap = None
+            self.label_img.setFixedSize(160, 160)
+            self.label_img.setStyleSheet(
+                f"background-color: {NEON_GREEN}; border-radius: 8px;"
+            )
         layout.addWidget(self.label_img, alignment=Qt.AlignHCenter)
 
-        # --- Title ---
+        # Title
         title_lbl = QLabel(data.get("title", ""))
-        title_lbl.setFont(QFont("Arial", 18, QFont.Bold))
+        title_lbl.setFont(QFont("Arial", 16, QFont.Bold))
         title_lbl.setWordWrap(True)
         title_lbl.setAlignment(Qt.AlignCenter)
-        # constrain to the same max width
         title_lbl.setMaximumWidth(200)
         layout.addWidget(title_lbl)
 
-        # --- Artist ---
+        # Artist
         artist_lbl = QLabel(data.get("artist", ""))
         artist_lbl.setFont(QFont("Arial", 14))
         artist_lbl.setWordWrap(True)
@@ -55,13 +66,14 @@ class CarouselItem(QWidget):
         artist_lbl.setMaximumWidth(200)
         layout.addWidget(artist_lbl)
 
-        # --- BPM & Key ---
+        # BPM & Key
         meta_lbl = QLabel(f"{data.get('bpm')} BPM | {data.get('key')}")
-        meta_lbl.setFont(QFont("Arial", 18, QFont.Bold))
+        meta_lbl.setFont(QFont("Arial", 14, QFont.Bold))
         meta_lbl.setWordWrap(True)
         meta_lbl.setAlignment(Qt.AlignCenter)
         meta_lbl.setMaximumWidth(200)
         layout.addWidget(meta_lbl)
+
 
 class CoverCarousel(QWidget):
     """
@@ -73,37 +85,56 @@ class CoverCarousel(QWidget):
         self.current_index = 0
 
         self.setStyleSheet("background: transparent;")
-        # scroll area setup
+
+        # Scroll area
         self.scroll = QScrollArea()
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("background: transparent; border: none;")
 
-        # container for items
+        # Container & layout
         self.container = QWidget()
         self.container.setStyleSheet("background: transparent;")
         self.h_layout = QHBoxLayout(self.container)
         self.h_layout.setContentsMargins(20, 20, 20, 20)
         self.h_layout.setSpacing(40)
 
-        # add items
+        # Populate initial items
         for d in items:
             self.h_layout.addWidget(CarouselItem(d))
 
         self.scroll.setWidget(self.container)
 
-        # main layout
+        # Main layout
         main_l = QHBoxLayout(self)
         main_l.addWidget(self.scroll)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumHeight(260)
 
-        # smooth-scroll animation
+        # Smooth-scroll animation
         self.anim = QPropertyAnimation(self.scroll.horizontalScrollBar(), b"value", self)
         self.anim.setDuration(300)
 
-        # initial focus
+        # Initial focus
+        self.update_focus()
+
+    def set_items(self, items):
+        """
+        Replace carousel contents with a new list of items.
+        """
+        self.items = items
+        # Remove old widgets
+        for i in reversed(range(self.h_layout.count())):
+            w = self.h_layout.takeAt(i).widget()
+            if w:
+                w.setParent(None)
+        # Add new widgets
+        for d in items:
+            self.h_layout.addWidget(CarouselItem(d))
+        # Clamp current index
+        self.current_index = min(self.current_index, len(items) - 1)
+        # Refresh view
         self.update_focus()
 
     def next(self):
@@ -121,38 +152,25 @@ class CoverCarousel(QWidget):
         curr = self.current_index
         nxt = curr + 1 if curr + 1 < count else curr
 
-        # resize covers
+        # Resize covers
         for i in range(count):
             item = self.h_layout.itemAt(i).widget()
-            side = 240 if i in (curr, nxt) else 160
-            item.label_img.setPixmap(
-                item.pixmap.scaled(side, side, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
-            item.label_img.setFixedSize(side, side)
+            size = 240 if i in (curr, nxt) else 160
+            if item.pixmap:
+                item.label_img.setPixmap(
+                    item.pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+            item.label_img.setFixedSize(size, size)
 
-        # center current+next
+        # Center current+next
         w1 = self.h_layout.itemAt(curr).widget()
         w2 = self.h_layout.itemAt(nxt).widget()
         mid = (w1.x() + w2.x() + w2.width()) / 2
         vpw = self.scroll.viewport().width()
-        tgt = int(mid - vpw / 2)
+        target = int(mid - vpw / 2)
 
         start = self.scroll.horizontalScrollBar().value()
         self.anim.stop()
         self.anim.setStartValue(start)
-        self.anim.setEndValue(max(0, tgt))
+        self.anim.setEndValue(max(0, target))
         self.anim.start()
-    def set_items(self, items):
-        """Replace the carousel’s items and refresh focus."""
-        self.items = items
-        # remove old widgets
-        for i in reversed(range(self.h_layout.count())):
-            w = self.h_layout.takeAt(i).widget()
-            if w:
-                w.setParent(None)
-        # add new items
-        for data in items:
-            self.h_layout.addWidget(CarouselItem(data))
-        # adjust current index if out of range
-        self.current_index = min(self.current_index, len(items) - 1)
-        self.update_focus()
