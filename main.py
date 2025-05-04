@@ -1,18 +1,18 @@
 # main.py
 
-import sys
-import os
+import sys, os
 from PySide6.QtWidgets import QApplication, QInputDialog
 from ui.main_window import MainWindow
 
+def load_styles(app):
+    qss_path = os.path.join(os.path.dirname(__file__), "ui", "styles.qss")
+    if os.path.exists(qss_path):
+        with open(qss_path, "r") as f:
+            app.setStyleSheet(f.read())
+
 def main():
     app = QApplication(sys.argv)
-
-    # Load QSS if present
-    qss = os.path.join(os.path.dirname(__file__), "ui", "styles.qss")
-    if os.path.exists(qss):
-        with open(qss) as f:
-            app.setStyleSheet(f.read())
+    load_styles(app)
 
     # Prompt for SoundCloud playlist URL
     url, ok = QInputDialog.getText(None, "Load Playlist", "Paste SoundCloud playlist URL:")
